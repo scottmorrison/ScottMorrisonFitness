@@ -145,12 +145,43 @@
   <div style="margin:auto;padding:32px 24px;display:flex;flex-direction:column;align-items:center;width:100%">
     <div class="login-logo">Scott <span>Morrison</span><br>Fitness</div>
     <div class="login-tagline">Train harder. Track smarter.</div>
-    <div class="login-card">
+
+    <!-- Sign in panel -->
+    <div class="login-card" id="panel-signin">
       <h2>Sign In</h2>
       <div class="field"><label>Email</label><input type="email" id="login-email" placeholder="you@example.com" autocomplete="email"></div>
       <div class="field"><label>Password</label><input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password"></div>
-      <button class="btn btn-primary" id="login-btn" onclick="doLogin()">Sign In →</button>
+      <button class="btn btn-primary" id="login-btn" onclick="doLogin()">Sign In &#x2192;</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="showPanel('forgot')">Forgot password?</button>
       <p class="text-muted" style="text-align:center;margin-top:14px;font-size:12px">Don't have an account? Your trainer will invite you.</p>
+    </div>
+
+    <!-- Forgot password panel -->
+    <div class="login-card" id="panel-forgot" style="display:none">
+      <h2>Reset Password</h2>
+      <p class="text-muted" style="margin-bottom:16px;font-size:13px">Enter your email and we'll send you a link to reset your password.</p>
+      <div class="field"><label>Email</label><input type="email" id="forgot-email" placeholder="you@example.com" autocomplete="email"></div>
+      <button class="btn btn-primary" id="forgot-btn" onclick="doForgotPassword()">Send Reset Link &#x2192;</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="showPanel('signin')">&#x2190; Back to sign in</button>
+    </div>
+
+    <!-- New client: set password after clicking magic link -->
+    <div class="login-card" id="panel-setpassword" style="display:none">
+      <h2>Set Your Password</h2>
+      <p class="text-muted" style="margin-bottom:16px;font-size:13px">Welcome! Choose a password to complete your account setup.</p>
+      <div class="field"><label>New Password</label><input type="password" id="new-password" placeholder="Choose a password"></div>
+      <div class="field"><label>Confirm Password</label><input type="password" id="confirm-password" placeholder="Confirm your password"></div>
+      <button class="btn btn-primary" id="setpassword-btn" onclick="doSetPassword()">Set Password &amp; Sign In &#x2192;</button>
+    </div>
+
+    <!-- Email sent confirmation -->
+    <div class="login-card" id="panel-emailsent" style="display:none">
+      <div style="text-align:center;padding:8px 0">
+        <div style="font-size:40px;margin-bottom:16px">&#x1F4E7;</div>
+        <h2 style="margin-bottom:12px">Check Your Email</h2>
+        <p class="text-muted" style="font-size:13px;margin-bottom:20px">We've sent a link to <strong id="sent-to-email" style="color:var(--white)"></strong>.<br>Click it to sign in and set your password.</p>
+        <button class="btn btn-ghost" style="width:100%" onclick="showPanel('signin')">&#x2190; Back to sign in</button>
+      </div>
     </div>
   </div>
 </div>
@@ -281,11 +312,11 @@
   <div class="modal">
     <div class="modal-handle"></div>
     <h3>Invite Client</h3>
+    <p class="text-muted" style="margin-bottom:16px;font-size:13px">They'll receive an email with a link to set their own password and access the app.</p>
     <div class="field"><label>Full Name</label><input type="text" id="invite-name" placeholder="e.g. Alex Johnson"></div>
     <div class="field"><label>Email Address</label><input type="email" id="invite-email" placeholder="alex@example.com"></div>
-    <div class="field"><label>Password for them</label><input type="text" id="invite-password" placeholder="e.g. Fitness2025"></div>
     <div class="field"><label>Assign Plan (optional)</label><select id="invite-plan"><option value="">— No plan yet —</option></select></div>
-    <button class="btn btn-primary" id="invite-btn" onclick="inviteClient()">Create Account</button>
+    <button class="btn btn-primary" id="invite-btn" onclick="inviteClient()">Send Invite Email</button>
     <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="closeModal('modal-invite')">Cancel</button>
   </div>
 </div>
@@ -316,7 +347,7 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink, updatePassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, getDocs, addDoc, collection, query, where, orderBy, serverTimestamp, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -400,7 +431,92 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
-// ── Login / Logout ──
+// ── Login / Logout / Magic link / Forgot password ──
+
+const APP_URL = "https://scottmorrisonfitness.netlify.app/";
+const ACTION_CODE_SETTINGS = { url: APP_URL, handleCodeInApp: true };
+
+// Show/hide login panels
+window.showPanel = function(name) {
+  ["panel-signin","panel-forgot","panel-setpassword","panel-emailsent"].forEach(id => {
+    document.getElementById(id).style.display = "none";
+  });
+  document.getElementById("panel-" + name).style.display = "block";
+};
+
+// Check on page load if this is a magic link click
+(async function checkMagicLink() {
+  if (isSignInWithEmailLink(auth, window.location.href)) {
+    let email = window.localStorage.getItem("emailForSignIn");
+    if (!email) email = window.prompt("Please confirm your email address:");
+    if (!email) return;
+    try {
+      await setPersistence(auth, browserLocalPersistence);
+      const result = await signInWithEmailLink(auth, email, window.location.href);
+      window.localStorage.removeItem("emailForSignIn");
+      // New client — check if they need to set a password
+      // Check if they have a profile already, or need to create one from pending
+      let profileSnap = await getDoc(doc(db, "users", result.user.uid));
+      if (!profileSnap.exists()) {
+        // First sign in — move pending profile to users collection
+        const pendingSnap = await getDoc(doc(db, "pendingUsers", email.toLowerCase()));
+        if (pendingSnap.exists()) {
+          await setDoc(doc(db, "users", result.user.uid), { ...pendingSnap.data(), uid: result.user.uid });
+        }
+        // Show set password screen
+        hideLoading();
+        showScreen("screen-login");
+        showPanel("setpassword");
+      } else if (!profileSnap.data().passwordSet) {
+        hideLoading();
+        showScreen("screen-login");
+        showPanel("setpassword");
+      }
+      // If password already set, onAuthStateChanged will handle navigation
+    } catch(e) {
+      console.error("Magic link error:", e);
+      hideLoading();
+      showScreen("screen-login");
+      showToast("That link has expired. Please ask your trainer to resend.", true);
+    }
+  }
+})();
+
+window.doSetPassword = async function() {
+  const pass = document.getElementById("new-password").value;
+  const confirm = document.getElementById("confirm-password").value;
+  if (!pass || pass.length < 6) { showToast("Password must be at least 6 characters", true); return; }
+  if (pass !== confirm) { showToast("Passwords don't match", true); return; }
+  const btn = document.getElementById("setpassword-btn");
+  btn.disabled = true; btn.textContent = "Saving...";
+  try {
+    await updatePassword(auth.currentUser, pass);
+    await updateDoc(doc(db, "users", auth.currentUser.uid), { passwordSet: true });
+    showToast("Password set! Welcome aboard 💪");
+    // onAuthStateChanged will now navigate them in
+  } catch(e) {
+    console.error("Set password error:", e);
+    showToast("Error setting password. Please try again.", true);
+    btn.disabled = false; btn.textContent = "Set Password & Sign In →";
+  }
+};
+
+window.doForgotPassword = async function() {
+  const email = document.getElementById("forgot-email").value.trim();
+  if (!email) { showToast("Please enter your email", true); return; }
+  const btn = document.getElementById("forgot-btn");
+  btn.disabled = true; btn.textContent = "Sending...";
+  try {
+    await sendPasswordResetEmail(auth, email);
+    document.getElementById("sent-to-email").textContent = email;
+    showPanel("emailsent");
+  } catch(e) {
+    console.error("Reset error:", e);
+    showToast("Could not send reset email. Check the address and try again.", true);
+  }
+  btn.disabled = false; btn.textContent = "Send Reset Link →";
+};
+
 window.doLogin = async function() {
   const email = document.getElementById("login-email").value.trim();
   const pass = document.getElementById("login-password").value;
@@ -563,39 +679,35 @@ window.createPlan = async function() {
   btn.disabled = false; btn.textContent = "Save Plan";
 };
 
-// ── Invite client — FIXED: uses secondary app so admin stays signed in ──
+// ── Invite client — sends magic link email, admin stays signed in ──
 window.inviteClient = async function() {
   const name = document.getElementById("invite-name").value.trim();
   const email = document.getElementById("invite-email").value.trim();
-  const password = document.getElementById("invite-password").value.trim();
   const planId = document.getElementById("invite-plan").value;
-  if (!name || !email || !password) { showToast("Please fill in all fields", true); return; }
+  if (!name || !email) { showToast("Please fill in name and email", true); return; }
   const btn = document.getElementById("invite-btn");
-  btn.disabled = true; btn.textContent = "Creating...";
+  btn.disabled = true; btn.textContent = "Sending invite...";
   try {
-    // Create account using a secondary Firebase app instance so admin stays signed in
-    const { initializeApp: initApp2, getApp, deleteApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
-    const { getAuth: getAuth2, createUserWithEmailAndPassword: createUser2 } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
-    let secondaryApp;
-    try { secondaryApp = getApp("secondary"); } catch(e) { secondaryApp = initApp2(firebaseConfig, "secondary"); }
-    const secondaryAuth = getAuth2(secondaryApp);
-    const cred = await createUser2(secondaryAuth, email, password);
-    await signOut(secondaryAuth);
-    await setDoc(doc(db, "users", cred.user.uid), {
+    // Store a pending profile in Firestore keyed by email
+    // (UID assigned when they first sign in via magic link)
+    await setDoc(doc(db, "pendingUsers", email.toLowerCase()), {
       name, email, role: "client",
       planId: planId || null,
       joined: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
-      createdAt: serverTimestamp()
+      createdAt: serverTimestamp(),
+      passwordSet: false
     });
+    // Send the magic link email
+    await sendSignInLinkToEmail(auth, email, ACTION_CODE_SETTINGS);
     closeModal("modal-invite");
-    ["invite-name","invite-email","invite-password"].forEach(id => document.getElementById(id).value = "");
+    ["invite-name","invite-email"].forEach(id => document.getElementById(id).value = "");
     await loadAdminData(); renderClientList();
-    showToast(`${name} added! Send them the app link and their password.`);
+    showToast(`Invite sent to ${email}!`);
   } catch(e) {
     console.error("Invite error:", e);
-    showToast(e.message.includes("email-already") ? "That email is already registered" : "Error creating account", true);
+    showToast("Error sending invite. Check the email address.", true);
   }
-  btn.disabled = false; btn.textContent = "Create Account";
+  btn.disabled = false; btn.textContent = "Send Invite";
 };
 
 function renderAdminProgress() {
