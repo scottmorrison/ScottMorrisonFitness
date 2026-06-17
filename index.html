@@ -309,6 +309,18 @@
   </nav>
 </div>
 
+<!-- DELETE CLIENT MODAL -->
+<div class="modal-overlay" id="modal-delete-client">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <h3>Remove Client</h3>
+    <p class="text-muted" style="margin-bottom:8px">Are you sure you want to remove <strong id="delete-client-name" style="color:var(--white)"></strong> from the app?</p>
+    <p class="text-muted" style="margin-bottom:24px;font-size:12px">This will delete their profile and all workout logs. It cannot be undone.</p>
+    <button class="btn" style="width:100%;background:var(--red);color:white;border:none;margin-bottom:8px" id="confirm-delete-btn" onclick="doDeleteClient()">Yes, remove them</button>
+    <button class="btn btn-ghost" style="width:100%" onclick="closeModal('modal-delete-client')">Cancel</button>
+  </div>
+</div>
+
 <!-- MODALS -->
 <div class="modal-overlay" id="modal-invite">
   <div class="modal">
@@ -350,7 +362,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink, updatePassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-import { getFirestore, doc, setDoc, getDoc, getDocs, addDoc, collection, query, where, orderBy, serverTimestamp, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, getDocs, addDoc, collection, query, where, orderBy, serverTimestamp, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBHrsHVPB_q_G_I-En4teQ-rpcK8ofWHxU",
@@ -635,7 +647,12 @@ window.openClientDetail = async function(clientId) {
       <div class="text-muted">${c.email}</div></div>
     </div>
     <div class="section-label">Assigned Plan</div>${planSection}
-    <div class="section-label" style="margin-top:20px">Workout Logs (${logs.length})</div>${logSection}`;
+    <div class="section-label" style="margin-top:20px">Workout Logs (${logs.length})</div>${logSection}
+    <div class="divider" style="margin-top:32px"></div>
+    <div style="padding:8px 0 16px">
+      <p class="text-muted" style="font-size:12px;margin-bottom:12px">Removing a client deletes their profile and all workout logs from the app. This cannot be undone.</p>
+      <button class="btn" style="width:100%;background:transparent;border:1px solid var(--red);color:var(--red)" onclick="confirmDeleteClient('${clientId}','${c.name}')">Remove ${c.name} from app</button>
+    </div>`;
   showScreen("screen-admin-client-detail");
 };
 
@@ -657,6 +674,34 @@ window.assignPlan = async function(clientId, planId) {
   closeModal("modal-assign-plan");
   showToast("Plan assigned!");
   openClientDetail(clientId);
+};
+
+window.confirmDeleteClient = function(clientId, clientName) {
+  selectedClientId = clientId;
+  document.getElementById("delete-client-name").textContent = clientName;
+  openModal("modal-delete-client");
+};
+
+window.doDeleteClient = async function() {
+  if (!selectedClientId) return;
+  const btn = document.getElementById("confirm-delete-btn");
+  btn.disabled = true; btn.textContent = "Removing...";
+  try {
+    // Delete all their workout logs
+    const logsSnap = await getDocs(query(collection(db, "workoutLogs"), where("userId", "==", selectedClientId)));
+    await Promise.all(logsSnap.docs.map(d => deleteDoc(doc(db, "workoutLogs", d.id))));
+    // Delete their user profile
+    await deleteDoc(doc(db, "users", selectedClientId));
+    closeModal("modal-delete-client");
+    await loadAdminData();
+    renderClientList();
+    adminNav("clients");
+    showToast("Client removed.");
+  } catch(e) {
+    console.error("Delete error:", e);
+    showToast("Error removing client. Please try again.", true);
+    btn.disabled = false; btn.textContent = "Yes, remove them";
+  }
 };
 
 function renderPlansList() {
