@@ -1,7 +1,7 @@
 {
   "name": "Scott Morrison Fitness",
   "short_name": "SM Fitness",
-  "description": "Personal training app — workout plans, tracking and progress",
+  "description": "Personal training app",
   "start_url": "/index.html",
   "display": "standalone",
   "background_color": "#0f0f0f",
