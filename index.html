@@ -417,21 +417,32 @@ let activeExerciseIdx = 0;
 let selectedClientId = null;
 
 // ── Auth state listener ──
+const authTimeout = setTimeout(() => {
+  hideLoading();
+  showScreen("screen-login");
+}, 5000);
+
 onAuthStateChanged(auth, async (user) => {
+  clearTimeout(authTimeout);
   if (user) {
     currentUser = user;
-    const profileSnap = await getDoc(doc(db, "users", user.uid));
-    if (profileSnap.exists()) {
-      currentProfile = profileSnap.data();
-      hideLoading();
-      if (currentProfile.role === "admin") {
-        await loadAdminData();
-        showScreen("screen-admin-dashboard");
+    try {
+      const profileSnap = await getDoc(doc(db, "users", user.uid));
+      if (profileSnap.exists()) {
+        currentProfile = profileSnap.data();
+        hideLoading();
+        if (currentProfile.role === "admin") {
+          await loadAdminData();
+          showScreen("screen-admin-dashboard");
+        } else {
+          await loadClientHome();
+          showScreen("screen-client-home");
+        }
       } else {
-        await loadClientHome();
-        showScreen("screen-client-home");
+        hideLoading();
+        showScreen("screen-login");
       }
-    } else {
+    } catch(e) {
       hideLoading();
       showScreen("screen-login");
     }
