@@ -359,9 +359,9 @@
     <h3 id="plan-modal-title">New Workout Plan</h3>
     <input type="hidden" id="plan-edit-id" value="">
     <div class="field"><label>Plan Name</label><input type="text" id="plan-name-input" placeholder="e.g. Push / Pull / Legs"></div>
-    <div class="field"><label>Description</label><textarea id="plan-desc-input" placeholder="Brief overview..."></textarea></div>
+    <div class="field"><label>Description (optional)</label><textarea id="plan-desc-input" placeholder="Brief overview..."></textarea></div>
     <div class="section-label" style="margin-top:16px">Sessions</div>
-    <p class="text-muted" style="font-size:12px;margin-bottom:12px">Add one session per row. Each session is assigned to a day of the week.</p>
+    <p class="text-muted" style="font-size:12px;margin-bottom:12px">Add each session with its exercises. Sets, reps and days are set per client when you assign the plan.</p>
     <div id="sessions-builder"></div>
     <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:8px" onclick="addSessionRow()">+ Add Session</button>
     <div style="margin-top:20px">
@@ -374,10 +374,21 @@
 <div class="modal-overlay" id="modal-assign-plan">
   <div class="modal">
     <div class="modal-handle"></div>
-    <h3>Assign Plan</h3>
-    <p class="text-muted" style="margin-bottom:16px">Assigning to <strong id="assign-client-name" style="color:var(--white)"></strong></p>
-    <div id="assign-plan-list"></div>
-    <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="closeModal('modal-assign-plan')">Cancel</button>
+    <!-- Step 1: pick a plan -->
+    <div id="assign-step-1">
+      <h3>Assign Plan</h3>
+      <p class="text-muted" style="margin-bottom:16px">Choose a plan for <strong id="assign-client-name" style="color:var(--white)"></strong></p>
+      <div id="assign-plan-list"></div>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="closeModal('modal-assign-plan')">Cancel</button>
+    </div>
+    <!-- Step 2: customise sets/reps/days for this client -->
+    <div id="assign-step-2" style="display:none">
+      <h3>Customise for Client</h3>
+      <p class="text-muted" style="margin-bottom:16px;font-size:13px">Set the day, sets and reps for each session for <strong id="assign-client-name-2" style="color:var(--white)"></strong></p>
+      <div id="assign-sessions-builder"></div>
+      <button class="btn btn-primary" id="confirm-assign-btn" style="margin-top:16px" onclick="confirmAssignPlan()">Assign Plan</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="document.getElementById('assign-step-1').style.display='block';document.getElementById('assign-step-2').style.display='none'">← Back</button>
+    </div>
   </div>
 </div>
 
@@ -664,7 +675,7 @@ window.openClientDetail = async function(clientId) {
     logs = lSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch(e) { console.error(e); }
   const planSection = plan
-    ? `<div class="plan-card" style="border-color:var(--lime)"><div class="plan-card-header"><div><div class="plan-name">${plan.name}</div><div class="plan-meta">${plan.days} days/week</div></div><button class="btn btn-secondary btn-sm" onclick="openAssignPlan('${clientId}')">Change</button></div></div>`
+    ? `<div class="plan-card" style="border-color:var(--lime)"><div class="plan-card-header"><div><div class="plan-name">${plan.name}</div><div class="plan-meta">${(c.planAssignment && c.planAssignment.sessions ? c.planAssignment.sessions.length : (plan.workouts||[]).length)} sessions customised</div></div><button class="btn btn-secondary btn-sm" onclick="openAssignPlan('${clientId}')">Edit Assignment</button></div></div>`
     : `<div class="card" style="text-align:center;padding:24px"><p class="text-muted" style="margin-bottom:12px">No plan assigned yet</p><button class="btn btn-lime-outline btn-sm" onclick="openAssignPlan('${clientId}')">Assign Plan</button></div>`;
   const logSection = logs.length ? logs.map(l => `
     <div class="log-entry"><div class="log-date">${formatDate(l.createdAt)} · ${l.workoutName}</div>
@@ -688,24 +699,107 @@ window.openClientDetail = async function(clientId) {
   showScreen("screen-admin-client-detail");
 };
 
+// Step 1: pick which plan
 window.openAssignPlan = function(clientId) {
   selectedClientId = clientId;
   const c = allClients.find(x => x.id === clientId);
   document.getElementById("assign-client-name").textContent = c.name;
-  document.getElementById("assign-plan-list").innerHTML = allPlans.map(p => `
+  document.getElementById("assign-step-1").style.display = "block";
+  document.getElementById("assign-step-2").style.display = "none";
+  document.getElementById("assign-plan-list").innerHTML = allPlans.length ? allPlans.map(p => `
     <div class="plan-card" style="${c.planId === p.id ? "border-color:var(--lime)" : ""}">
-      <div class="plan-card-header"><div><div class="plan-name">${p.name}</div><div class="plan-meta">${p.desc || ""}</div></div>
-      <button class="btn btn-primary btn-sm" onclick="assignPlan('${clientId}','${p.id}')">Assign</button></div></div>`).join("");
+      <div class="plan-card-header">
+        <div><div class="plan-name">${p.name}</div><div class="plan-meta">${p.desc || ""} · ${(p.workouts||[]).length} sessions</div></div>
+        <button class="btn btn-primary btn-sm" onclick="selectPlanForAssign('${p.id}')">Select</button>
+      </div>
+    </div>`).join("") : "<p class='text-muted'>No plans yet — create one first.</p>";
   openModal("modal-assign-plan");
 };
 
-window.assignPlan = async function(clientId, planId) {
-  await updateDoc(doc(db, "users", clientId), { planId });
-  const c = allClients.find(x => x.id === clientId);
-  if (c) c.planId = planId;
-  closeModal("modal-assign-plan");
-  showToast("Plan assigned!");
-  openClientDetail(clientId);
+// Step 2: customise sets/reps/days per session for this client
+window.selectPlanForAssign = function(planId) {
+  const p = allPlans.find(x => x.id === planId);
+  const c = allClients.find(x => x.id === selectedClientId);
+  if (!p || !c) return;
+  window._assigningPlanId = planId;
+  // Get existing assignment if any to pre-fill
+  const existing = c.planAssignment || {};
+  document.getElementById("assign-client-name-2").textContent = c.name;
+  document.getElementById("assign-step-1").style.display = "none";
+  document.getElementById("assign-step-2").style.display = "block";
+  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday","Rest Day"];
+  document.getElementById("assign-sessions-builder").innerHTML = (p.workouts||[]).map((w, i) => {
+    const prev = existing.sessions ? existing.sessions[i] : null;
+    return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px">
+      <div style="font-family:var(--font-display);font-size:16px;font-weight:700;text-transform:uppercase;margin-bottom:10px">${w.name}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <div class="field" style="margin:0"><label style="font-size:10px">Day</label>
+          <select class="assign-day">
+            ${DAYS.map(d => `<option ${prev&&prev.day===d?"selected":""}>${d}</option>`).join("")}
+          </select>
+        </div>
+        <div></div>
+      </div>
+      ${(w.exercises||[]).map((ex, j) => {
+        const prevEx = prev && prev.exercises ? prev.exercises[j] : null;
+        return `<div style="display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;margin-bottom:6px">
+          <div style="font-size:13px;font-weight:500">${ex.name}</div>
+          <div class="field" style="margin:0;width:70px">
+            <label style="font-size:10px">Sets</label>
+            <input type="number" class="assign-sets set-input" placeholder="3" value="${prevEx ? prevEx.sets : ""}" style="padding:6px 8px;text-align:center">
+          </div>
+          <div class="field" style="margin:0;width:80px">
+            <label style="font-size:10px">Reps</label>
+            <input type="text" class="assign-reps set-input" placeholder="8-10" value="${prevEx ? prevEx.reps : ""}" style="padding:6px 8px;text-align:center">
+          </div>
+        </div>`;
+      }).join("")}
+    </div>`;
+  }).join("");
+};
+
+// Confirm and save the assignment
+window.confirmAssignPlan = async function() {
+  const planId = window._assigningPlanId;
+  const p = allPlans.find(x => x.id === planId);
+  if (!planId || !p) return;
+  const btn = document.getElementById("confirm-assign-btn");
+  btn.disabled = true; btn.textContent = "Assigning...";
+  try {
+    const sessionBlocks = document.querySelectorAll("#assign-sessions-builder > div");
+    const sessions = Array.from(sessionBlocks).map((block, i) => {
+      const w = p.workouts[i];
+      const day = block.querySelector(".assign-day").value;
+      const setsInputs = block.querySelectorAll(".assign-sets");
+      const repsInputs = block.querySelectorAll(".assign-reps");
+      const exercises = (w.exercises||[]).map((ex, j) => ({
+        name: ex.name,
+        sets: setsInputs[j] ? setsInputs[j].value || "3" : "3",
+        reps: repsInputs[j] ? repsInputs[j].value || "10" : "10"
+      }));
+      return { name: w.name, day, exercises };
+    });
+    // Store planId + custom assignment on client profile
+    // Keep existing planHistory so we don't lose old data
+    const clientSnap = await getDoc(doc(db, "users", selectedClientId));
+    const clientData = clientSnap.data();
+    const history = clientData.planHistory || [];
+    // Archive current plan to history if switching to a different one
+    if (clientData.planId && clientData.planId !== planId && clientData.planAssignment) {
+      history.push({ planId: clientData.planId, assignment: clientData.planAssignment, archivedAt: new Date().toISOString() });
+    }
+    await updateDoc(doc(db, "users", selectedClientId), {
+      planId,
+      planAssignment: { planId, sessions },
+      planHistory: history
+    });
+    const c = allClients.find(x => x.id === selectedClientId);
+    if (c) { c.planId = planId; c.planAssignment = { planId, sessions }; }
+    closeModal("modal-assign-plan");
+    showToast("Plan assigned!");
+    openClientDetail(selectedClientId);
+  } catch(e) { console.error(e); showToast("Error assigning plan", true); }
+  btn.disabled = false; btn.textContent = "Assign Plan";
 };
 
 window.confirmDeleteClient = function(clientId, clientName) {
@@ -758,7 +852,7 @@ function renderPlansList() {
           const dayLabel = w.day ? `<span style="background:var(--lime);color:var(--black);font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;margin-left:8px">${w.day}</span>` : "";
           return `<div style="margin-bottom:10px">
             <div style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.7px;margin-bottom:6px;display:flex;align-items:center">${w.name}${dayLabel}</div>
-            ${(w.exercises||[]).map((ex,i) => `<div class="exercise-item"><div class="exercise-num">${i+1}</div><div class="exercise-name">${ex.name}</div><div class="exercise-sets">${ex.sets}×${ex.reps}</div></div>`).join("")}
+            ${(w.exercises||[]).map((ex,i) => `<div class="exercise-item"><div class="exercise-num">${i+1}</div><div class="exercise-name">${ex.name}</div></div>`).join("")}
           </div>`;
         }).join('<div class="divider"></div>')}
       </div>
@@ -782,18 +876,11 @@ window.addSessionRow = function(session) {
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-      <div class="field" style="margin:0"><label style="font-size:10px">Session Name</label>
-        <input type="text" class="session-name" placeholder="e.g. Push Day" value="${session ? session.name : ""}">
-      </div>
-      <div class="field" style="margin:0"><label style="font-size:10px">Day</label>
-        <select class="session-day">
-          ${DAYS_OF_WEEK.map(d => `<option ${session && session.day===d?"selected":""}>${d}</option>`).join("")}
-        </select>
-      </div>
+    <div class="field" style="margin:0 0 8px"><label style="font-size:10px">Session Name</label>
+      <input type="text" class="session-name" placeholder="e.g. Push Day" value="${session ? session.name : ""}">
     </div>
-    <div class="field" style="margin:0"><label style="font-size:10px">Exercises (Name · sets · reps, one per line)</label>
-      <textarea class="session-exercises" placeholder="Bench Press · 4 · 8&#10;Overhead Press · 3 · 10" style="min-height:80px;font-size:13px">${session ? (session.exercises||[]).map(ex => ex.name+" · "+ex.sets+" · "+ex.reps).join("\n") : ""}</textarea>
+    <div class="field" style="margin:0"><label style="font-size:10px">Exercises (one per line)</label>
+      <textarea class="session-exercises" placeholder="Bench Press&#10;Overhead Press&#10;Tricep Pushdown" style="min-height:80px;font-size:13px">${session ? (session.exercises||[]).map(ex => ex.name).join("\n") : ""}</textarea>
     </div>`;
   container.appendChild(div);
 };
@@ -840,13 +927,9 @@ window.savePlan = async function() {
   if (!rows.length) { showToast("Add at least one session", true); return; }
   const workouts = Array.from(rows).map(row => {
     const sessionName = row.querySelector(".session-name").value.trim() || "Session";
-    const day = row.querySelector(".session-day").value;
     const rawEx = row.querySelector(".session-exercises").value.trim();
-    const exercises = rawEx ? rawEx.split("\n").filter(Boolean).map(line => {
-      const parts = line.split("·").map(s => s.trim());
-      return { name: parts[0] || "Exercise", sets: parseInt(parts[1]) || 3, reps: parseInt(parts[2]) || 10 };
-    }) : [];
-    return { name: sessionName, day, exercises };
+    const exercises = rawEx ? rawEx.split("\n").filter(Boolean).map(line => ({ name: line.trim() })) : [];
+    return { name: sessionName, exercises };
   });
   const btn = document.getElementById("create-plan-btn");
   btn.disabled = true; btn.textContent = "Saving...";
@@ -963,20 +1046,24 @@ window.loadClientHome = async function loadClientHome() {
     if (!pSnap.exists()) { el.innerHTML = "<p class=\"text-muted\">Plan not found. Ask your trainer to reassign.</p>"; return; }
     const plan = { id: pSnap.id, ...pSnap.data() };
     document.getElementById("client-plan-subtitle").textContent = plan.name + " · " + plan.days + " days/week";
-    const dayOrder = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday","Rest Day"];
-    const sortedWorkouts = (plan.workouts || []).slice().sort(function(a,b) {
+    // Use client's custom assignment if available, otherwise fall back to plan workouts
+    const assignment = currentProfile.planAssignment;
+    const sessions = assignment && assignment.sessions ? assignment.sessions : (plan.workouts||[]).map(w => ({...w, exercises: (w.exercises||[]).map(ex => ({name: ex.name, sets: "3", reps: "10"}))}));
+    const dayOrder = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday","Rest Day",""];
+    const sortedSessions = sessions.slice().sort(function(a,b) {
       return dayOrder.indexOf(a.day||"") - dayOrder.indexOf(b.day||"");
     });
-    let sessionsHtml = sortedWorkouts.map(function(w, i) {
-      const origIdx = (plan.workouts||[]).indexOf(w);
-      const dayBadge = w.day ? "<span style=\"background:var(--lime);color:var(--black);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-left:8px\">" + w.day + "</span>" : "";
-      let exHtml = (w.exercises || []).slice(0, 3).map(function(ex, j) {
-        return "<div class=\"exercise-item\"><div class=\"exercise-num\">" + (j+1) + "</div><div class=\"exercise-name\">" + ex.name + "</div><div class=\"exercise-sets\">" + ex.sets + "×" + ex.reps + "</div></div>";
+    let sessionsHtml = sortedSessions.map(function(w, i) {
+      const origIdx = sessions.indexOf(w);
+      const dayBadge = w.day && w.day !== "Monday" ? "<span style=\"background:var(--lime);color:var(--black);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-left:8px\">" + w.day + "</span>" : (w.day ? "<span style=\"background:var(--lime);color:var(--black);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-left:8px\">" + w.day + "</span>" : "");
+      let exHtml = (w.exercises || []).slice(0, 4).map(function(ex, j) {
+        const setsReps = (ex.sets && ex.reps) ? ex.sets + " sets × " + ex.reps + " reps" : "";
+        return "<div class=\"exercise-item\"><div class=\"exercise-num\">" + (j+1) + "</div><div class=\"exercise-name\">" + ex.name + "</div><div class=\"exercise-sets\">" + setsReps + "</div></div>";
       }).join("");
-      let moreHtml = (w.exercises || []).length > 3 ? "<div class=\"text-muted text-sm\" style=\"padding:8px 0 4px;padding-left:34px\">+" + ((w.exercises||[]).length - 3) + " more exercises</div>" : "";
+      let moreHtml = (w.exercises || []).length > 4 ? "<div class=\"text-muted text-sm\" style=\"padding:8px 0 4px;padding-left:34px\">+" + ((w.exercises||[]).length - 4) + " more exercises</div>" : "";
       const isRestDay = w.day === "Rest Day";
       const btnHtml = isRestDay ? "<div style=\"text-align:center;padding:10px 0;color:var(--muted);font-size:13px\">Rest & recover 💤</div>" : "<button class=\"btn btn-primary\" style=\"margin-top:12px;width:100%\" onclick=\"startWorkout(" + origIdx + ",\'"+plan.id+"\')\">Start " + w.name + " →</button>";
-      return "<div class=\"plan-card\"><div style=\"display:flex;align-items:center;margin-bottom:4px\"><div class=\"plan-name\">" + w.name + "</div>" + dayBadge + "</div><div class=\"plan-meta\">" + (w.exercises||[]).length + " exercises</div>" + (isRestDay ? "" : "<div style=\"margin-top:10px\">" + exHtml + moreHtml + "</div>") + btnHtml + "</div>";
+      return "<div class=\"plan-card\"><div style=\"display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:4px\"><div class=\"plan-name\">" + w.name + "</div>" + dayBadge + "</div><div class=\"plan-meta\">" + (w.exercises||[]).length + " exercises</div>" + (isRestDay ? "" : "<div style=\"margin-top:10px\">" + exHtml + moreHtml + "</div>") + btnHtml + "</div>";
     }).join("");
     el.innerHTML = "<div class=\"card\" style=\"border-color:var(--lime);margin-bottom:12px\"><div class=\"card-header\"><div class=\"card-title\">" + plan.name + "</div></div><p class=\"text-muted text-sm\" style=\"margin-bottom:12px\">" + (plan.desc||"") + "</p><div class=\"stat-grid\" style=\"margin-bottom:0\"><div class=\"stat-box\"><div class=\"stat-val\">" + logs.length + "</div><div class=\"stat-label\">Sessions Done</div></div><div class=\"stat-box\"><div class=\"stat-val\">" + plan.days + "</div><div class=\"stat-label\">Days/Week</div></div></div></div><div class=\"section-label\">Your Weekly Schedule</div>" + sessionsHtml;
   } catch(e) {
@@ -995,10 +1082,20 @@ window.clientNav = async function(tab) {
 window.startWorkout = async function(workoutIdx, planId) {
   const snap = await getDoc(doc(db, "plans", planId));
   const plan = snap.data();
-  const workout = plan.workouts[workoutIdx];
+  // Use client's custom assignment if available
+  const profileSnap = await getDoc(doc(db, "users", currentUser.uid));
+  const profile = profileSnap.data();
+  const assignment = profile.planAssignment;
+  const sessions = assignment && assignment.sessions ? assignment.sessions : plan.workouts;
+  const workout = sessions[workoutIdx];
   activeWorkoutLog = {
     userId: currentUser.uid, planId, workoutName: workout.name,
-    exercises: workout.exercises.map(ex => ({ name: ex.name, targetSets: ex.sets, targetReps: ex.reps, sets: Array.from({ length: ex.sets }, () => ({ reps: "", weight: "" })) }))
+    exercises: (workout.exercises||[]).map(ex => ({
+      name: ex.name,
+      targetSets: parseInt(ex.sets) || 3,
+      targetReps: ex.reps || "10",
+      sets: Array.from({ length: parseInt(ex.sets) || 3 }, () => ({ reps: "", weight: "" }))
+    }))
   };
   activeExerciseIdx = 0;
   renderLogScreen();
