@@ -482,41 +482,54 @@ window.showPanel = function(name) {
   document.getElementById("panel-" + name).style.display = "block";
 };
 
-// Check on page load if this is a magic link click
+// Check on page load if this is a magic link click (client clicking their invite email)
 (async function checkMagicLink() {
-  if (isSignInWithEmailLink(auth, window.location.href)) {
-    let email = window.localStorage.getItem("emailForSignIn");
-    if (!email) email = window.prompt("Please confirm your email address:");
-    if (!email) return;
-    try {
-      await setPersistence(auth, browserLocalPersistence);
-      const result = await signInWithEmailLink(auth, email, window.location.href);
-      window.localStorage.removeItem("emailForSignIn");
-      // New client — check if they need to set a password
-      // Check if they have a profile already, or need to create one from pending
-      let profileSnap = await getDoc(doc(db, "users", result.user.uid));
-      if (!profileSnap.exists()) {
-        // First sign in — move pending profile to users collection
-        const pendingSnap = await getDoc(doc(db, "pendingUsers", email.toLowerCase()));
-        if (pendingSnap.exists()) {
-          await setDoc(doc(db, "users", result.user.uid), { ...pendingSnap.data(), uid: result.user.uid });
-        }
-        // Show set password screen
+  if (!isSignInWithEmailLink(auth, window.location.href)) return;
+  // Get email — stored when admin sent invite, or ask client to type it
+  let email = window.localStorage.getItem("emailForSignIn");
+  if (!email) email = window.prompt("Please enter the email address your invite was sent to:");
+  if (!email) { hideLoading(); showScreen("screen-login"); return; }
+  try {
+    await setPersistence(auth, browserLocalPersistence);
+    const result = await signInWithEmailLink(auth, email, window.location.href);
+    window.localStorage.removeItem("emailForSignIn");
+    // Clean the magic link params from the URL so it can't be reused
+    window.history.replaceState({}, document.title, "/");
+    // Check if user profile exists already
+    let profileSnap = await getDoc(doc(db, "users", result.user.uid));
+    if (!profileSnap.exists()) {
+      // First time — pull their pending profile and create proper user document
+      const pendingSnap = await getDoc(doc(db, "pendingUsers", email.toLowerCase()));
+      if (pendingSnap.exists()) {
+        const pendingData = pendingSnap.data();
+        await setDoc(doc(db, "users", result.user.uid), {
+          ...pendingData,
+          uid: result.user.uid,
+          passwordSet: false
+        });
+        // Delete pending record now it's been used
+        await deleteDoc(doc(db, "pendingUsers", email.toLowerCase()));
+      } else {
+        // No pending profile found — could be an old invite link
         hideLoading();
         showScreen("screen-login");
-        showPanel("setpassword");
-      } else if (!profileSnap.data().passwordSet) {
-        hideLoading();
-        showScreen("screen-login");
-        showPanel("setpassword");
+        showToast("Invite not found. Please ask your trainer to resend.", true);
+        return;
       }
-      // If password already set, onAuthStateChanged will handle navigation
-    } catch(e) {
-      console.error("Magic link error:", e);
+    }
+    // Check if they still need to set a password
+    profileSnap = await getDoc(doc(db, "users", result.user.uid));
+    if (!profileSnap.exists() || profileSnap.data().passwordSet === false) {
       hideLoading();
       showScreen("screen-login");
-      showToast("That link has expired. Please ask your trainer to resend.", true);
+      showPanel("setpassword");
     }
+    // If passwordSet is true, onAuthStateChanged will navigate them in
+  } catch(e) {
+    console.error("Magic link error:", e);
+    hideLoading();
+    showScreen("screen-login");
+    showToast("That link has expired. Please ask your trainer to resend.", true);
   }
 })();
 
@@ -759,7 +772,7 @@ window.createPlan = async function() {
   btn.disabled = false; btn.textContent = "Save Plan";
 };
 
-// ── Invite client — sends magic link email, admin stays signed in ──
+// ── Invite client — stores pending user and sends EmailJS invite ──
 window.inviteClient = async function() {
   const name = document.getElementById("invite-name").value.trim();
   const email = document.getElementById("invite-email").value.trim();
@@ -768,12 +781,7 @@ window.inviteClient = async function() {
   const btn = document.getElementById("invite-btn");
   btn.disabled = true; btn.textContent = "Sending invite...";
   try {
-    // 1. Generate the Firebase magic link
-    await sendSignInLinkToEmail(auth, email, ACTION_CODE_SETTINGS);
-    // Store email in localStorage so we can retrieve it when they click the link
-    window.localStorage.setItem("emailForSignIn", email);
-
-    // 2. Store pending profile in Firestore
+    // 1. Store pending profile in Firestore keyed by email
     await setDoc(doc(db, "pendingUsers", email.toLowerCase()), {
       name, email, role: "client",
       planId: planId || null,
@@ -782,20 +790,26 @@ window.inviteClient = async function() {
       passwordSet: false
     });
 
-    // 3. Send branded invite email via EmailJS
-    await emailjs.send("smfitness_gmail", "template_ygfny8i", {
+    // 2. Generate Firebase magic sign-in link and store email for retrieval
+    await sendSignInLinkToEmail(auth, email, ACTION_CODE_SETTINGS);
+
+    // 3. Send branded invite email via EmailJS with the app URL
+    // Client clicks the link in THIS email, lands on app, magic link is detected
+    const emailResult = await emailjs.send("smfitness_gmail", "template_ygfny8i", {
       to_name: name,
       to_email: email,
       invite_link: "https://scottmorrisonfitness.netlify.app/"
     });
+    console.log("EmailJS result:", emailResult);
 
     closeModal("modal-invite");
     ["invite-name","invite-email"].forEach(id => document.getElementById(id).value = "");
     await loadAdminData(); renderClientList();
-    showToast(`Invite sent to ${name}!`);
+    showToast("Invite sent to " + name + "!");
   } catch(e) {
     console.error("Invite error:", e);
-    showToast("Error sending invite: " + e.text || e.message, true);
+    const msg = (e && (e.text || e.message)) ? (e.text || e.message) : "Unknown error";
+    showToast("Error: " + msg, true);
   }
   btn.disabled = false; btn.textContent = "Send Invite Email";
 };
