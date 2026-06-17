@@ -832,45 +832,38 @@ function renderAdminProgress() {
 
 // ── Client ──
 async function loadClientHome() {
+  const el = document.getElementById("client-plan-card");
+  el.innerHTML = "<p class=\"text-muted\">Loading...</p>";
   try {
     const snap = await getDoc(doc(db, "users", currentUser.uid));
+    if (!snap.exists()) { el.innerHTML = "<p class=\"text-muted\">Profile not found.</p>"; return; }
     currentProfile = snap.data();
     const firstName = (currentProfile.name || "there").split(" ")[0];
-    document.getElementById("client-greeting").innerHTML = `Hey, <span class="text-lime">${firstName}.</span>`;
+    document.getElementById("client-greeting").innerHTML = "Hey, <span class=\"text-lime\">" + firstName + ".</span>";
     const lSnap = await getDocs(query(collection(db, "workoutLogs"), where("userId", "==", currentUser.uid), orderBy("createdAt", "desc")));
     const logs = lSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    const el = document.getElementById("client-plan-card");
     if (!currentProfile.planId) {
       document.getElementById("client-plan-subtitle").textContent = "No plan assigned yet";
-      el.innerHTML = '<div class="empty-state"><div class="empty-icon">🏋️</div><p>Your trainer hasn\'t assigned a plan yet.<br>Check back soon!</p></div>'; return;
+      el.innerHTML = "<div class=\"empty-state\"><div class=\"empty-icon\">🏋️</div><p>Your trainer hasn\'t assigned a plan yet.<br>Check back soon!</p></div><button class=\"btn btn-secondary\" style=\"width:100%;margin-top:12px\" onclick=\"loadClientHome()\">↻ Refresh</button>";
+      return;
     }
     const pSnap = await getDoc(doc(db, "plans", currentProfile.planId));
-    if (!pSnap.exists()) { el.innerHTML = '<p class="text-muted">Plan not found.</p>'; return; }
+    if (!pSnap.exists()) { el.innerHTML = "<p class=\"text-muted\">Plan not found. Ask your trainer to reassign.</p>"; return; }
     const plan = { id: pSnap.id, ...pSnap.data() };
-    document.getElementById("client-plan-subtitle").textContent = `${plan.name} · ${plan.days} days/week`;
-    el.innerHTML = `
-      <div class="card" style="border-color:var(--lime);margin-bottom:12px">
-        <div class="card-header"><div class="card-title">${plan.name}</div></div>
-        <p class="text-muted text-sm" style="margin-bottom:12px">${plan.desc || ""}</p>
-        <div class="stat-grid" style="margin-bottom:0">
-          <div class="stat-box"><div class="stat-val">${logs.length}</div><div class="stat-label">Sessions Done</div></div>
-          <div class="stat-box"><div class="stat-val">${plan.days}</div><div class="stat-label">Days/Week</div></div>
-        </div>
-      </div>
-      <div class="section-label">Sessions in this plan</div>
-      ${(plan.workouts || []).map((w, i) => `
-        <div class="plan-card">
-          <div class="plan-name">${w.name}</div>
-          <div class="plan-meta">${(w.exercises || []).length} exercises</div>
-          <div style="margin-top:10px">
-            ${(w.exercises || []).slice(0, 3).map((ex, j) => `<div class="exercise-item"><div class="exercise-num">${j + 1}</div><div class="exercise-name">${ex.name}</div><div class="exercise-sets">${ex.sets}×${ex.reps}</div></div>`).join("")}
-            ${(w.exercises || []).length > 3 ? `<div class="text-muted text-sm" style="padding:8px 0 4px;padding-left:34px">+${(w.exercises || []).length - 3} more exercises</div>` : ""}
-          </div>
-          <button class="btn btn-primary" style="margin-top:12px;width:100%" onclick="startWorkout(${i},'${plan.id}')">Start ${w.name} →</button>
-        </div>`).join("")}`;
-  } catch(e) { console.error("loadClientHome error:", e); }
+    document.getElementById("client-plan-subtitle").textContent = plan.name + " · " + plan.days + " days/week";
+    let sessionsHtml = (plan.workouts || []).map(function(w, i) {
+      let exHtml = (w.exercises || []).slice(0, 3).map(function(ex, j) {
+        return "<div class=\"exercise-item\"><div class=\"exercise-num\">" + (j+1) + "</div><div class=\"exercise-name\">" + ex.name + "</div><div class=\"exercise-sets\">" + ex.sets + "×" + ex.reps + "</div></div>";
+      }).join("");
+      let moreHtml = (w.exercises || []).length > 3 ? "<div class=\"text-muted text-sm\" style=\"padding:8px 0 4px;padding-left:34px\">+" + ((w.exercises||[]).length - 3) + " more exercises</div>" : "";
+      return "<div class=\"plan-card\"><div class=\"plan-name\">" + w.name + "</div><div class=\"plan-meta\">" + (w.exercises||[]).length + " exercises</div><div style=\"margin-top:10px\">" + exHtml + moreHtml + "</div><button class=\"btn btn-primary\" style=\"margin-top:12px;width:100%\" onclick=\"startWorkout(" + i + ",\'"+plan.id+"\')\">Start " + w.name + " →</button></div>";
+    }).join("");
+    el.innerHTML = "<div class=\"card\" style=\"border-color:var(--lime);margin-bottom:12px\"><div class=\"card-header\"><div class=\"card-title\">" + plan.name + "</div></div><p class=\"text-muted text-sm\" style=\"margin-bottom:12px\">" + (plan.desc||"") + "</p><div class=\"stat-grid\" style=\"margin-bottom:0\"><div class=\"stat-box\"><div class=\"stat-val\">" + logs.length + "</div><div class=\"stat-label\">Sessions Done</div></div><div class=\"stat-box\"><div class=\"stat-val\">" + plan.days + "</div><div class=\"stat-label\">Days/Week</div></div></div></div><div class=\"section-label\">Sessions in this plan</div>" + sessionsHtml;
+  } catch(e) {
+    console.error("loadClientHome error:", e);
+    el.innerHTML = "<div class=\"empty-state\"><div class=\"empty-icon\">⚠️</div><p>Couldn\'t load your plan.<br>Check your connection and try again.</p></div><button class=\"btn btn-secondary\" style=\"width:100%;margin-top:12px\" onclick=\"loadClientHome()\">↻ Try Again</button>";
+  }
 }
-
 window.clientNav = async function(tab) {
   const map = { home: "screen-client-home", log: "screen-client-log", history: "screen-client-history" };
   if (tab === "home") await loadClientHome();
