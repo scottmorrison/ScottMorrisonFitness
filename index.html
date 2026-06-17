@@ -243,7 +243,7 @@
 
 <!-- ADMIN PLANS -->
 <div class="screen" id="screen-admin-plans">
-  <div class="topbar"><div class="topbar-logo">SM <span>Fitness</span></div><div class="topbar-right"><button class="btn btn-primary btn-sm" onclick="openModal('modal-create-plan')">+ Plan</button><button class="btn-icon" onclick="doLogout()"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button></div></div>
+  <div class="topbar"><div class="topbar-logo">SM <span>Fitness</span></div><div class="topbar-right"><button class="btn btn-primary btn-sm" onclick="openCreatePlan()">+ Plan</button><button class="btn-icon" onclick="doLogout()"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button></div></div>
   <div class="scroll-content">
     <div class="page-header"><h1>Workout Plans</h1><p>Build and assign training programmes</p></div>
     <div id="plans-list"><p class="text-muted">Loading...</p></div>
@@ -356,14 +356,18 @@
 <div class="modal-overlay" id="modal-create-plan">
   <div class="modal">
     <div class="modal-handle"></div>
-    <h3>New Workout Plan</h3>
+    <h3 id="plan-modal-title">New Workout Plan</h3>
+    <input type="hidden" id="plan-edit-id" value="">
     <div class="field"><label>Plan Name</label><input type="text" id="plan-name-input" placeholder="e.g. Push / Pull / Legs"></div>
     <div class="field"><label>Description</label><textarea id="plan-desc-input" placeholder="Brief overview..."></textarea></div>
-    <div class="field"><label>Days per week</label><select id="plan-days-input"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option></select></div>
-    <div class="field"><label>Session Name</label><input type="text" id="plan-session-name" placeholder="e.g. Push Day"></div>
-    <div class="field"><label>Exercises (one per line: Name · sets · reps)</label><textarea id="plan-exercises-input" placeholder="Bench Press · 4 · 8&#10;Overhead Press · 3 · 10&#10;Tricep Pushdown · 3 · 12" style="min-height:100px"></textarea></div>
-    <button class="btn btn-primary" id="create-plan-btn" onclick="createPlan()">Save Plan</button>
-    <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="closeModal('modal-create-plan')">Cancel</button>
+    <div class="section-label" style="margin-top:16px">Sessions</div>
+    <p class="text-muted" style="font-size:12px;margin-bottom:12px">Add one session per row. Each session is assigned to a day of the week.</p>
+    <div id="sessions-builder"></div>
+    <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:8px" onclick="addSessionRow()">+ Add Session</button>
+    <div style="margin-top:20px">
+      <button class="btn btn-primary" id="create-plan-btn" onclick="savePlan()">Save Plan</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="closeModal('modal-create-plan')">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -735,39 +739,147 @@ window.doDeleteClient = async function() {
 
 function renderPlansList() {
   const el = document.getElementById("plans-list");
-  el.innerHTML = allPlans.length ? allPlans.map(p => `
-    <div class="plan-card"><div class="plan-card-header"><div>
-      <div class="plan-name">${p.name}</div><div class="plan-meta">${p.days} days/week · ${(p.workouts || []).length} sessions</div>
-    </div></div>
-    <div style="margin-top:12px">${(p.workouts || []).map(w => `
-      <div style="margin-bottom:10px">
-        <div style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.7px;margin-bottom:6px">${w.name}</div>
-        ${(w.exercises || []).map((ex, i) => `<div class="exercise-item"><div class="exercise-num">${i + 1}</div><div class="exercise-name">${ex.name}</div><div class="exercise-sets">${ex.sets}×${ex.reps}</div></div>`).join("")}
-      </div>`).join('<div class="divider"></div>')}</div></div>`).join("")
-    : '<div class="empty-state"><div class="empty-icon">📋</div><p>No plans yet. Create your first one!</p></div>';
+  const DAYS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  el.innerHTML = allPlans.length ? allPlans.map(p => {
+    const assignedCount = allClients.filter(c => c.planId === p.id).length;
+    return `<div class="plan-card">
+      <div class="plan-card-header">
+        <div>
+          <div class="plan-name">${p.name}</div>
+          <div class="plan-meta">${(p.workouts||[]).length} sessions · ${assignedCount} client${assignedCount!==1?"s":""} assigned</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="openEditPlan('${p.id}')">Edit</button>
+          <button class="btn btn-sm" style="background:transparent;border:1px solid var(--red);color:var(--red)" onclick="confirmDeletePlan('${p.id}','${p.name.replace(/'/g,"\'")}')">Delete</button>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        ${(p.workouts||[]).map(w => {
+          const dayLabel = w.day ? `<span style="background:var(--lime);color:var(--black);font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;margin-left:8px">${w.day}</span>` : "";
+          return `<div style="margin-bottom:10px">
+            <div style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.7px;margin-bottom:6px;display:flex;align-items:center">${w.name}${dayLabel}</div>
+            ${(w.exercises||[]).map((ex,i) => `<div class="exercise-item"><div class="exercise-num">${i+1}</div><div class="exercise-name">${ex.name}</div><div class="exercise-sets">${ex.sets}×${ex.reps}</div></div>`).join("")}
+          </div>`;
+        }).join('<div class="divider"></div>')}
+      </div>
+    </div>`;
+  }).join("") : '<div class="empty-state"><div class="empty-icon">📋</div><p>No plans yet. Create your first one!</p></div>';
 }
 
-window.createPlan = async function() {
+const DAYS_OF_WEEK = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday","Rest Day"];
+
+// Add a session row to the plan builder
+window.addSessionRow = function(session) {
+  const container = document.getElementById("sessions-builder");
+  const idx = container.children.length;
+  const div = document.createElement("div");
+  div.className = "session-row";
+  div.style.cssText = "background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px";
+  div.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+      <div style="font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.7px">Session ${idx+1}</div>
+      <button class="btn-icon" style="padding:4px" onclick="this.closest('.session-row').remove();renumberSessions()">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <div class="field" style="margin:0"><label style="font-size:10px">Session Name</label>
+        <input type="text" class="session-name" placeholder="e.g. Push Day" value="${session ? session.name : ""}">
+      </div>
+      <div class="field" style="margin:0"><label style="font-size:10px">Day</label>
+        <select class="session-day">
+          ${DAYS_OF_WEEK.map(d => `<option ${session && session.day===d?"selected":""}>${d}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div class="field" style="margin:0"><label style="font-size:10px">Exercises (Name · sets · reps, one per line)</label>
+      <textarea class="session-exercises" placeholder="Bench Press · 4 · 8&#10;Overhead Press · 3 · 10" style="min-height:80px;font-size:13px">${session ? (session.exercises||[]).map(ex => ex.name+" · "+ex.sets+" · "+ex.reps).join("\n") : ""}</textarea>
+    </div>`;
+  container.appendChild(div);
+};
+
+window.renumberSessions = function() {
+  document.querySelectorAll(".session-row").forEach((row, i) => {
+    const label = row.querySelector("div[style*='text-transform']");
+    if (label) label.textContent = "Session " + (i+1);
+  });
+};
+
+// Open modal for NEW plan
+window.openCreatePlan = function() {
+  document.getElementById("plan-modal-title").textContent = "New Workout Plan";
+  document.getElementById("plan-edit-id").value = "";
+  document.getElementById("plan-name-input").value = "";
+  document.getElementById("plan-desc-input").value = "";
+  document.getElementById("sessions-builder").innerHTML = "";
+  addSessionRow();
+  openModal("modal-create-plan");
+};
+
+// Open modal to EDIT existing plan
+window.openEditPlan = function(planId) {
+  const p = allPlans.find(x => x.id === planId);
+  if (!p) return;
+  document.getElementById("plan-modal-title").textContent = "Edit Plan";
+  document.getElementById("plan-edit-id").value = planId;
+  document.getElementById("plan-name-input").value = p.name;
+  document.getElementById("plan-desc-input").value = p.desc || "";
+  document.getElementById("sessions-builder").innerHTML = "";
+  (p.workouts || []).forEach(w => addSessionRow(w));
+  if (!p.workouts || !p.workouts.length) addSessionRow();
+  openModal("modal-create-plan");
+};
+
+// Save plan (create or update)
+window.savePlan = async function() {
   const name = document.getElementById("plan-name-input").value.trim();
   const desc = document.getElementById("plan-desc-input").value.trim();
-  const days = parseInt(document.getElementById("plan-days-input").value);
-  const sessionName = document.getElementById("plan-session-name").value.trim() || "Session 1";
-  const rawEx = document.getElementById("plan-exercises-input").value.trim();
+  const editId = document.getElementById("plan-edit-id").value;
   if (!name) { showToast("Please enter a plan name", true); return; }
-  const exercises = rawEx ? rawEx.split("\n").filter(Boolean).map(line => {
-    const parts = line.split("·").map(s => s.trim());
-    return { name: parts[0], sets: parseInt(parts[1]) || 3, reps: parseInt(parts[2]) || 10 };
-  }) : [];
+  const rows = document.querySelectorAll(".session-row");
+  if (!rows.length) { showToast("Add at least one session", true); return; }
+  const workouts = Array.from(rows).map(row => {
+    const sessionName = row.querySelector(".session-name").value.trim() || "Session";
+    const day = row.querySelector(".session-day").value;
+    const rawEx = row.querySelector(".session-exercises").value.trim();
+    const exercises = rawEx ? rawEx.split("\n").filter(Boolean).map(line => {
+      const parts = line.split("·").map(s => s.trim());
+      return { name: parts[0] || "Exercise", sets: parseInt(parts[1]) || 3, reps: parseInt(parts[2]) || 10 };
+    }) : [];
+    return { name: sessionName, day, exercises };
+  });
   const btn = document.getElementById("create-plan-btn");
   btn.disabled = true; btn.textContent = "Saving...";
   try {
-    await addDoc(collection(db, "plans"), { name, desc, days, workouts: [{ name: sessionName, exercises }], createdAt: serverTimestamp() });
+    if (editId) {
+      await updateDoc(doc(db, "plans", editId), { name, desc, workouts, updatedAt: serverTimestamp() });
+      showToast("Plan updated!");
+    } else {
+      await addDoc(collection(db, "plans"), { name, desc, workouts, createdAt: serverTimestamp() });
+      showToast("Plan created!");
+    }
     closeModal("modal-create-plan");
-    ["plan-name-input","plan-desc-input","plan-exercises-input","plan-session-name"].forEach(id => document.getElementById(id).value = "");
     await loadAdminData(); renderPlansList();
-    showToast("Plan created!");
   } catch(e) { showToast("Error saving plan", true); console.error(e); }
   btn.disabled = false; btn.textContent = "Save Plan";
+};
+
+// Confirm delete plan
+window.confirmDeletePlan = function(planId, planName) {
+  if (confirm("Delete plan \"" + planName + "\"? This cannot be undone. Clients assigned this plan will need a new one.")) {
+    doDeletePlan(planId);
+  }
+};
+
+window.doDeletePlan = async function(planId) {
+  try {
+    await deleteDoc(doc(db, "plans", planId));
+    // Remove planId from any clients who had this plan assigned
+    const affected = allClients.filter(c => c.planId === planId);
+    await Promise.all(affected.map(c => updateDoc(doc(db, "users", c.id), { planId: null })));
+    await loadAdminData(); renderPlansList();
+    showToast("Plan deleted.");
+  } catch(e) { showToast("Error deleting plan", true); console.error(e); }
 };
 
 // ── Invite client — invite code system, no Firebase emails ──
@@ -831,7 +943,7 @@ function renderAdminProgress() {
 }
 
 // ── Client ──
-async function loadClientHome() {
+window.loadClientHome = async function loadClientHome() {
   const el = document.getElementById("client-plan-card");
   el.innerHTML = "<p class=\"text-muted\">Loading...</p>";
   try {
@@ -851,14 +963,22 @@ async function loadClientHome() {
     if (!pSnap.exists()) { el.innerHTML = "<p class=\"text-muted\">Plan not found. Ask your trainer to reassign.</p>"; return; }
     const plan = { id: pSnap.id, ...pSnap.data() };
     document.getElementById("client-plan-subtitle").textContent = plan.name + " · " + plan.days + " days/week";
-    let sessionsHtml = (plan.workouts || []).map(function(w, i) {
+    const dayOrder = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday","Rest Day"];
+    const sortedWorkouts = (plan.workouts || []).slice().sort(function(a,b) {
+      return dayOrder.indexOf(a.day||"") - dayOrder.indexOf(b.day||"");
+    });
+    let sessionsHtml = sortedWorkouts.map(function(w, i) {
+      const origIdx = (plan.workouts||[]).indexOf(w);
+      const dayBadge = w.day ? "<span style=\"background:var(--lime);color:var(--black);font-size:10px;font-weight:700;padding:2px 8px;border-radius:4px;margin-left:8px\">" + w.day + "</span>" : "";
       let exHtml = (w.exercises || []).slice(0, 3).map(function(ex, j) {
         return "<div class=\"exercise-item\"><div class=\"exercise-num\">" + (j+1) + "</div><div class=\"exercise-name\">" + ex.name + "</div><div class=\"exercise-sets\">" + ex.sets + "×" + ex.reps + "</div></div>";
       }).join("");
       let moreHtml = (w.exercises || []).length > 3 ? "<div class=\"text-muted text-sm\" style=\"padding:8px 0 4px;padding-left:34px\">+" + ((w.exercises||[]).length - 3) + " more exercises</div>" : "";
-      return "<div class=\"plan-card\"><div class=\"plan-name\">" + w.name + "</div><div class=\"plan-meta\">" + (w.exercises||[]).length + " exercises</div><div style=\"margin-top:10px\">" + exHtml + moreHtml + "</div><button class=\"btn btn-primary\" style=\"margin-top:12px;width:100%\" onclick=\"startWorkout(" + i + ",\'"+plan.id+"\')\">Start " + w.name + " →</button></div>";
+      const isRestDay = w.day === "Rest Day";
+      const btnHtml = isRestDay ? "<div style=\"text-align:center;padding:10px 0;color:var(--muted);font-size:13px\">Rest & recover 💤</div>" : "<button class=\"btn btn-primary\" style=\"margin-top:12px;width:100%\" onclick=\"startWorkout(" + origIdx + ",\'"+plan.id+"\')\">Start " + w.name + " →</button>";
+      return "<div class=\"plan-card\"><div style=\"display:flex;align-items:center;margin-bottom:4px\"><div class=\"plan-name\">" + w.name + "</div>" + dayBadge + "</div><div class=\"plan-meta\">" + (w.exercises||[]).length + " exercises</div>" + (isRestDay ? "" : "<div style=\"margin-top:10px\">" + exHtml + moreHtml + "</div>") + btnHtml + "</div>";
     }).join("");
-    el.innerHTML = "<div class=\"card\" style=\"border-color:var(--lime);margin-bottom:12px\"><div class=\"card-header\"><div class=\"card-title\">" + plan.name + "</div></div><p class=\"text-muted text-sm\" style=\"margin-bottom:12px\">" + (plan.desc||"") + "</p><div class=\"stat-grid\" style=\"margin-bottom:0\"><div class=\"stat-box\"><div class=\"stat-val\">" + logs.length + "</div><div class=\"stat-label\">Sessions Done</div></div><div class=\"stat-box\"><div class=\"stat-val\">" + plan.days + "</div><div class=\"stat-label\">Days/Week</div></div></div></div><div class=\"section-label\">Sessions in this plan</div>" + sessionsHtml;
+    el.innerHTML = "<div class=\"card\" style=\"border-color:var(--lime);margin-bottom:12px\"><div class=\"card-header\"><div class=\"card-title\">" + plan.name + "</div></div><p class=\"text-muted text-sm\" style=\"margin-bottom:12px\">" + (plan.desc||"") + "</p><div class=\"stat-grid\" style=\"margin-bottom:0\"><div class=\"stat-box\"><div class=\"stat-val\">" + logs.length + "</div><div class=\"stat-label\">Sessions Done</div></div><div class=\"stat-box\"><div class=\"stat-val\">" + plan.days + "</div><div class=\"stat-label\">Days/Week</div></div></div></div><div class=\"section-label\">Your Weekly Schedule</div>" + sessionsHtml;
   } catch(e) {
     console.error("loadClientHome error:", e);
     el.innerHTML = "<div class=\"empty-state\"><div class=\"empty-icon\">⚠️</div><p>Couldn\'t load your plan.<br>Check your connection and try again.</p></div><button class=\"btn btn-secondary\" style=\"width:100%;margin-top:12px\" onclick=\"loadClientHome()\">↻ Try Again</button>";
