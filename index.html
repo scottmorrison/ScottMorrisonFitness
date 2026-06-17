@@ -130,6 +130,8 @@
   .w-dot.done { background: var(--lime); }
   .w-dot.current { background: var(--lime); width: 20px; border-radius: 4px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script>emailjs.init("bKKiLBaMcYWt0PUxs");</script>
 </head>
 <body>
 
@@ -149,8 +151,8 @@
     <!-- Sign in panel -->
     <div class="login-card" id="panel-signin">
       <h2>Sign In</h2>
-      <div class="field"><label>Email</label><input type="email" id="login-email" placeholder="you@example.com" autocomplete="email"></div>
-      <div class="field"><label>Password</label><input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password"></div>
+      <div class="field"><label>Email</label><input type="email" id="login-email" placeholder="you@example.com" autocomplete="email" onkeydown="if(event.key==='Enter')doLogin()"></div>
+      <div class="field"><label>Password</label><input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()"></div>
       <button class="btn btn-primary" id="login-btn" onclick="doLogin()">Sign In &#x2192;</button>
       <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="showPanel('forgot')">Forgot password?</button>
       <p class="text-muted" style="text-align:center;margin-top:14px;font-size:12px">Don't have an account? Your trainer will invite you.</p>
@@ -398,12 +400,12 @@ function formatDate(ts) {
 }
 function initials(name) { return (name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2); }
 
-// ── Auth — with 8 second safety timeout ──
+// ── Auth — with 15 second safety timeout ──
 const authTimeout = setTimeout(() => {
   console.log("Auth timeout — showing login");
   hideLoading();
   showScreen("screen-login");
-}, 8000);
+}, 15000);
 
 onAuthStateChanged(auth, async (user) => {
   clearTimeout(authTimeout);
@@ -416,6 +418,13 @@ onAuthStateChanged(auth, async (user) => {
     const snap = await getDoc(doc(db, "users", user.uid));
     if (!snap.exists()) { hideLoading(); showScreen("screen-login"); return; }
     currentProfile = snap.data();
+    // If client hasn't set a password yet, show the set password screen
+    if (currentProfile.passwordSet === false) {
+      hideLoading();
+      showScreen("screen-login");
+      showPanel("setpassword");
+      return;
+    }
     hideLoading();
     if (currentProfile.role === "admin") {
       await loadAdminData();
@@ -493,7 +502,15 @@ window.doSetPassword = async function() {
     await updatePassword(auth.currentUser, pass);
     await updateDoc(doc(db, "users", auth.currentUser.uid), { passwordSet: true });
     showToast("Password set! Welcome aboard 💪");
-    // onAuthStateChanged will now navigate them in
+    // Explicitly navigate them in rather than relying on onAuthStateChanged
+    currentProfile = (await getDoc(doc(db, "users", auth.currentUser.uid))).data();
+    if (currentProfile.role === "admin") {
+      await loadAdminData();
+      showScreen("screen-admin-dashboard");
+    } else {
+      await loadClientHome();
+      showScreen("screen-client-home");
+    }
   } catch(e) {
     console.error("Set password error:", e);
     showToast("Error setting password. Please try again.", true);
@@ -688,8 +705,12 @@ window.inviteClient = async function() {
   const btn = document.getElementById("invite-btn");
   btn.disabled = true; btn.textContent = "Sending invite...";
   try {
-    // Store a pending profile in Firestore keyed by email
-    // (UID assigned when they first sign in via magic link)
+    // 1. Generate the Firebase magic link
+    await sendSignInLinkToEmail(auth, email, ACTION_CODE_SETTINGS);
+    // Store email in localStorage so we can retrieve it when they click the link
+    window.localStorage.setItem("emailForSignIn", email);
+
+    // 2. Store pending profile in Firestore
     await setDoc(doc(db, "pendingUsers", email.toLowerCase()), {
       name, email, role: "client",
       planId: planId || null,
@@ -697,17 +718,23 @@ window.inviteClient = async function() {
       createdAt: serverTimestamp(),
       passwordSet: false
     });
-    // Send the magic link email
-    await sendSignInLinkToEmail(auth, email, ACTION_CODE_SETTINGS);
+
+    // 3. Send branded invite email via EmailJS
+    await emailjs.send("smfitness_gmail", "template_ygfny8i", {
+      to_name: name,
+      to_email: email,
+      invite_link: "https://scottmorrisonfitness.netlify.app/"
+    });
+
     closeModal("modal-invite");
     ["invite-name","invite-email"].forEach(id => document.getElementById(id).value = "");
     await loadAdminData(); renderClientList();
-    showToast(`Invite sent to ${email}!`);
+    showToast(`Invite sent to ${name}!`);
   } catch(e) {
     console.error("Invite error:", e);
-    showToast("Error sending invite. Check the email address.", true);
+    showToast("Error sending invite: " + e.text || e.message, true);
   }
-  btn.disabled = false; btn.textContent = "Send Invite";
+  btn.disabled = false; btn.textContent = "Send Invite Email";
 };
 
 function renderAdminProgress() {
