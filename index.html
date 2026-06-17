@@ -167,13 +167,14 @@
       <button class="btn btn-ghost" style="width:100%;margin-top:8px" onclick="showPanel('signin')">&#x2190; Back to sign in</button>
     </div>
 
-    <!-- New client: set password after clicking magic link -->
+    <!-- New client: set password after clicking invite link -->
     <div class="login-card" id="panel-setpassword" style="display:none">
-      <h2>Set Your Password</h2>
-      <p class="text-muted" style="margin-bottom:16px;font-size:13px">Welcome! Choose a password to complete your account setup.</p>
-      <div class="field"><label>New Password</label><input type="password" id="new-password" placeholder="Choose a password"></div>
+      <h2>Welcome!</h2>
+      <p class="text-muted" style="margin-bottom:16px;font-size:13px">Hi <strong id="new-invite-name" style="color:var(--white)"></strong>, set a password to access your training app.</p>
+      <div class="field"><label>Your Email</label><input type="email" id="new-invite-email" placeholder="your@email.com" readonly style="opacity:0.7"></div>
+      <div class="field"><label>Choose a Password</label><input type="password" id="new-password" placeholder="At least 6 characters"></div>
       <div class="field"><label>Confirm Password</label><input type="password" id="confirm-password" placeholder="Confirm your password"></div>
-      <button class="btn btn-primary" id="setpassword-btn" onclick="doSetPassword()">Set Password &amp; Sign In &#x2192;</button>
+      <button class="btn btn-primary" id="setpassword-btn" onclick="doSetPassword()">Create Account &amp; Sign In &#x2192;</button>
     </div>
 
     <!-- Email sent confirmation -->
@@ -378,7 +379,7 @@
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink, updatePassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, updatePassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 import { getFirestore, doc, setDoc, getDoc, getDocs, addDoc, collection, query, where, orderBy, serverTimestamp, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -471,9 +472,6 @@ onAuthStateChanged(auth, async (user) => {
 
 // ── Login / Logout / Magic link / Forgot password ──
 
-const APP_URL = "https://scottmorrisonfitness.netlify.app/";
-const ACTION_CODE_SETTINGS = { url: APP_URL, handleCodeInApp: true };
-
 // Show/hide login panels
 window.showPanel = function(name) {
   ["panel-signin","panel-forgot","panel-setpassword","panel-emailsent"].forEach(id => {
@@ -482,81 +480,81 @@ window.showPanel = function(name) {
   document.getElementById("panel-" + name).style.display = "block";
 };
 
-// Check on page load if this is a magic link click (client clicking their invite email)
-(async function checkMagicLink() {
-  if (!isSignInWithEmailLink(auth, window.location.href)) return;
-  // Get email — stored when admin sent invite, or ask client to type it
-  let email = window.localStorage.getItem("emailForSignIn");
-  if (!email) email = window.prompt("Please enter the email address your invite was sent to:");
-  if (!email) { hideLoading(); showScreen("screen-login"); return; }
+// Check on page load if this URL contains an invite code
+(async function checkInviteCode() {
+  const params = new URLSearchParams(window.location.search);
+  const inviteCode = params.get("invite");
+  if (!inviteCode) return;
+  // Clean the URL immediately
+  window.history.replaceState({}, document.title, "/");
+  // Look up the invite code in Firestore
   try {
-    await setPersistence(auth, browserLocalPersistence);
-    const result = await signInWithEmailLink(auth, email, window.location.href);
-    window.localStorage.removeItem("emailForSignIn");
-    // Clean the magic link params from the URL so it can't be reused
-    window.history.replaceState({}, document.title, "/");
-    // Check if user profile exists already
-    let profileSnap = await getDoc(doc(db, "users", result.user.uid));
-    if (!profileSnap.exists()) {
-      // First time — pull their pending profile and create proper user document
-      const pendingSnap = await getDoc(doc(db, "pendingUsers", email.toLowerCase()));
-      if (pendingSnap.exists()) {
-        const pendingData = pendingSnap.data();
-        await setDoc(doc(db, "users", result.user.uid), {
-          ...pendingData,
-          uid: result.user.uid,
-          passwordSet: false
-        });
-        // Delete pending record now it's been used
-        await deleteDoc(doc(db, "pendingUsers", email.toLowerCase()));
-      } else {
-        // No pending profile found — could be an old invite link
-        hideLoading();
-        showScreen("screen-login");
-        showToast("Invite not found. Please ask your trainer to resend.", true);
-        return;
-      }
-    }
-    // Check if they still need to set a password
-    profileSnap = await getDoc(doc(db, "users", result.user.uid));
-    if (!profileSnap.exists() || profileSnap.data().passwordSet === false) {
+    const inviteSnap = await getDoc(doc(db, "invites", inviteCode));
+    if (!inviteSnap.exists()) {
       hideLoading();
       showScreen("screen-login");
-      showPanel("setpassword");
+      showToast("This invite link is invalid or has already been used.", true);
+      return;
     }
-    // If passwordSet is true, onAuthStateChanged will navigate them in
-  } catch(e) {
-    console.error("Magic link error:", e);
+    const inviteData = inviteSnap.data();
+    // Store invite code so set-password screen can use it
+    window._pendingInviteCode = inviteCode;
+    window._pendingInviteData = inviteData;
     hideLoading();
     showScreen("screen-login");
-    showToast("That link has expired. Please ask your trainer to resend.", true);
+    // Pre-fill email and show set password panel
+    document.getElementById("new-invite-email").value = inviteData.email;
+    document.getElementById("new-invite-name").textContent = inviteData.name;
+    showPanel("setpassword");
+  } catch(e) {
+    console.error("Invite check error:", e);
+    hideLoading();
+    showScreen("screen-login");
   }
 })();
 
 window.doSetPassword = async function() {
+  const email = document.getElementById("new-invite-email").value.trim();
   const pass = document.getElementById("new-password").value;
   const confirm = document.getElementById("confirm-password").value;
+  if (!email) { showToast("Email not found. Please use the link from your invite email.", true); return; }
   if (!pass || pass.length < 6) { showToast("Password must be at least 6 characters", true); return; }
   if (pass !== confirm) { showToast("Passwords don't match", true); return; }
   const btn = document.getElementById("setpassword-btn");
-  btn.disabled = true; btn.textContent = "Saving...";
+  btn.disabled = true; btn.textContent = "Creating account...";
   try {
-    await updatePassword(auth.currentUser, pass);
-    await updateDoc(doc(db, "users", auth.currentUser.uid), { passwordSet: true });
-    showToast("Password set! Welcome aboard 💪");
-    // Explicitly navigate them in rather than relying on onAuthStateChanged
-    currentProfile = (await getDoc(doc(db, "users", auth.currentUser.uid))).data();
-    if (currentProfile.role === "admin") {
-      await loadAdminData();
-      showScreen("screen-admin-dashboard");
-    } else {
-      await loadClientHome();
-      showScreen("screen-client-home");
-    }
+    const inviteData = window._pendingInviteData;
+    const inviteCode = window._pendingInviteCode;
+    if (!inviteData) { showToast("Invite data missing. Please use your invite link again.", true); btn.disabled = false; btn.textContent = "Create Account & Sign In →"; return; }
+    // Create the Firebase account
+    await setPersistence(auth, browserLocalPersistence);
+    const cred = await createUserWithEmailAndPassword(auth, email, pass);
+    // Save their full profile to Firestore
+    await setDoc(doc(db, "users", cred.user.uid), {
+      name: inviteData.name,
+      email: inviteData.email,
+      role: "client",
+      planId: inviteData.planId || null,
+      joined: inviteData.joined || new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
+      passwordSet: true,
+      createdAt: serverTimestamp()
+    });
+    // Delete the used invite code
+    await deleteDoc(doc(db, "invites", inviteCode));
+    // Delete pending user record too if it exists
+    await deleteDoc(doc(db, "pendingUsers", email.toLowerCase())).catch(() => {});
+    showToast("Account created! Welcome aboard 💪");
+    window._pendingInviteCode = null;
+    window._pendingInviteData = null;
+    // Navigate them in
+    currentProfile = (await getDoc(doc(db, "users", cred.user.uid))).data();
+    await loadClientHome();
+    showScreen("screen-client-home");
   } catch(e) {
     console.error("Set password error:", e);
-    showToast("Error setting password. Please try again.", true);
-    btn.disabled = false; btn.textContent = "Set Password & Sign In →";
+    const msg = e.code === "auth/email-already-in-use" ? "An account with this email already exists. Try signing in instead." : "Error creating account. Please try again.";
+    showToast(msg, true);
+    btn.disabled = false; btn.textContent = "Create Account & Sign In →";
   }
 };
 
@@ -772,7 +770,7 @@ window.createPlan = async function() {
   btn.disabled = false; btn.textContent = "Save Plan";
 };
 
-// ── Invite client — stores pending user and sends EmailJS invite ──
+// ── Invite client — invite code system, no Firebase emails ──
 window.inviteClient = async function() {
   const name = document.getElementById("invite-name").value.trim();
   const email = document.getElementById("invite-email").value.trim();
@@ -781,24 +779,24 @@ window.inviteClient = async function() {
   const btn = document.getElementById("invite-btn");
   btn.disabled = true; btn.textContent = "Sending invite...";
   try {
-    // 1. Store pending profile in Firestore keyed by email
-    await setDoc(doc(db, "pendingUsers", email.toLowerCase()), {
+    // 1. Generate a unique invite code
+    const inviteCode = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+    const inviteLink = "https://scottmorrisonfitness.netlify.app/?invite=" + inviteCode;
+
+    // 2. Store the invite in Firestore
+    await setDoc(doc(db, "invites", inviteCode), {
       name, email, role: "client",
       planId: planId || null,
       joined: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }),
       createdAt: serverTimestamp(),
-      passwordSet: false
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
     });
 
-    // 2. Generate Firebase magic sign-in link and store email for retrieval
-    await sendSignInLinkToEmail(auth, email, ACTION_CODE_SETTINGS);
-
-    // 3. Send branded invite email via EmailJS with the app URL
-    // Client clicks the link in THIS email, lands on app, magic link is detected
+    // 3. Send branded invite email via EmailJS with the invite link
     const emailResult = await emailjs.send("smfitness_gmail", "template_ygfny8i", {
       to_name: name,
       to_email: email,
-      invite_link: "https://scottmorrisonfitness.netlify.app/"
+      invite_link: inviteLink
     });
     console.log("EmailJS result:", emailResult);
 
